@@ -115,70 +115,77 @@ module Env : sig
     val getFun              : AST.l -> t -> ident -> (ident list * ident list * AST.l * stmt list)
     val addFun              : AST.l -> t -> ident -> (ident list * ident list * AST.l * stmt list) -> unit
 
-    val getEncoding         : t -> ident -> encoding
-    val addEncoding         : t -> ident -> encoding -> unit
+    val getInstruction      : AST.l -> t -> ident -> (encoding * (stmt list) option * bool * stmt list)
+    val addInstruction      : AST.l -> t -> ident -> (encoding * (stmt list) option * bool * stmt list) -> unit
+
+    val getDecoder          : t -> ident -> decode_case
+    val addDecoder          : t -> ident -> decode_case -> unit
 
     val setImpdef           : t -> string -> value -> unit
     val getImpdef           : AST.l -> t -> string -> value
 
 end = struct
     type t = {
-        mutable encodings : encoding Bindings.t;
-        mutable functions : (ident list * ident list * AST.l * stmt list) Bindings.t;
-        mutable enums     : (value list) Bindings.t;
-        mutable enumEqs   : IdentSet.t;
-        mutable enumNeqs  : IdentSet.t;
-        mutable records   : ((AST.ty * ident) list) Bindings.t;
-        mutable typedefs  : AST.ty Bindings.t;
-        mutable globals   : scope;
-        mutable constants : scope;
-        mutable impdefs   : value ImpDefs.t;
-        mutable locals    : scope list
+        mutable instructions : (encoding * (stmt list) option * bool * stmt list) Bindings.t;
+        mutable decoders     : decode_case Bindings.t;
+        mutable functions    : (ident list * ident list * AST.l * stmt list) Bindings.t;
+        mutable enums        : (value list) Bindings.t;
+        mutable enumEqs      : IdentSet.t;
+        mutable enumNeqs     : IdentSet.t;
+        mutable records      : ((AST.ty * ident) list) Bindings.t;
+        mutable typedefs     : AST.ty Bindings.t;
+        mutable globals      : scope;
+        mutable constants    : scope;
+        mutable impdefs      : value ImpDefs.t;
+        mutable locals       : scope list
     }
 
     let empty = {
-        encodings  = Bindings.empty;
-        functions  = Bindings.empty;
-        enums      = Bindings.empty;
-        enumEqs    = IdentSet.empty;
-        enumNeqs   = IdentSet.empty;
-        records    = Bindings.empty;
-        typedefs   = Bindings.empty;
-        globals    = empty_scope ();
-        constants  = empty_scope ();
-        impdefs    = ImpDefs.empty;
-        locals     = [empty_scope ()];
+        decoders     = Bindings.empty;
+        instructions = Bindings.empty;
+        functions    = Bindings.empty;
+        enums        = Bindings.empty;
+        enumEqs      = IdentSet.empty;
+        enumNeqs     = IdentSet.empty;
+        records      = Bindings.empty;
+        typedefs     = Bindings.empty;
+        globals      = empty_scope ();
+        constants    = empty_scope ();
+        impdefs      = ImpDefs.empty;
+        locals       = [empty_scope ()];
     }
 
     let nestTop (k: t -> 'a) (parent: t): 'a =
         let child = {
-            encodings = parent.encodings;
-            functions = parent.functions;
-            enums     = parent.enums;
-            enumEqs   = parent.enumEqs;
-            enumNeqs  = parent.enumNeqs;
-            records   = parent.records;
-            typedefs  = parent.typedefs;
-            globals   = parent.globals;
-            constants = parent.constants;
-            impdefs   = parent.impdefs;
-            locals    = [empty_scope ()];  (* only change *)
+            decoders     = parent.decoders;
+            instructions = parent.instructions;
+            functions    = parent.functions;
+            enums        = parent.enums;
+            enumEqs      = parent.enumEqs;
+            enumNeqs     = parent.enumNeqs;
+            records      = parent.records;
+            typedefs     = parent.typedefs;
+            globals      = parent.globals;
+            constants    = parent.constants;
+            impdefs      = parent.impdefs;
+            locals       = [empty_scope ()];  (* only change *)
         } in
         k child
 
     let nest (k: t -> 'a) (parent: t): 'a =
         let child = {
-            encodings = parent.encodings;
-            functions = parent.functions;
-            enums     = parent.enums;
-            enumEqs   = parent.enumEqs;
-            enumNeqs  = parent.enumNeqs;
-            records   = parent.records;
-            typedefs  = parent.typedefs;
-            globals   = parent.globals;
-            constants = parent.constants;
-            impdefs   = parent.impdefs;
-            locals    = empty_scope () :: parent.locals;  (* only change *)
+            decoders     = parent.decoders;
+            instructions = parent.instructions;
+            functions    = parent.functions;
+            enums        = parent.enums;
+            enumEqs      = parent.enumEqs;
+            enumNeqs     = parent.enumNeqs;
+            records      = parent.records;
+            typedefs     = parent.typedefs;
+            globals      = parent.globals;
+            constants    = parent.constants;
+            impdefs      = parent.impdefs;
+            locals       = empty_scope () :: parent.locals;  (* only change *)
         } in
         k child
 
@@ -273,11 +280,17 @@ end = struct
         end;
         env.functions <- Bindings.add x def env.functions
 
-    let getEncoding (env: t) (x: ident): encoding =
-        Bindings.find x env.encodings
+    let getInstruction (loc: AST.l) (env: t) (x: ident): (encoding * (stmt list) option * bool * stmt list) =
+        Bindings.find x env.instructions
 
-    let addEncoding (env: t) (x: ident) (e: encoding): unit =
-        env.encodings <- Bindings.add x e env.encodings
+    let addInstruction (loc: AST.l) (env: t) (x: ident) (instr: encoding * (stmt list) option * bool * stmt list): unit =
+        env.instructions <- Bindings.add x instr env.instructions
+
+    let getDecoder (env: t) (x: ident): decode_case =
+        Bindings.find x env.decoders
+
+    let addDecoder (env: t) (x: ident) (d: decode_case): unit =
+        env.decoders <- Bindings.add x d env.decoders
 
     let setImpdef (env: t) (x: string) (v: value): unit =
         env.impdefs <- ImpDefs.add x v env.impdefs
@@ -793,6 +806,7 @@ and eval_proccall (loc: l) (env: Env.t) (f: ident) (tvs: value list) (vs: value 
 let eval_encoding (env: Env.t) (x: encoding) (op: value): bool =
     let Encoding_Block (nm, iset, fields, opcode, guard, unpreds, b, loc) = x in
     (* todo: consider checking iset *)
+    (* Printf.printf "Checking opcode match %s == %s\n" (Utils.to_string (PP.pp_opcode_value opcode)) (pp_value op); *)
     let ok = (match opcode with
     | Opcode_Bits b -> eval_eq     loc op (from_bitsLit b)
     | Opcode_Mask m -> eval_inmask loc op (from_maskLit m)
@@ -800,14 +814,16 @@ let eval_encoding (env: Env.t) (x: encoding) (op: value): bool =
     if ok then begin
         if !trace_instruction then Printf.printf "TRACE: instruction %s\n" (pprint_ident nm);
         List.iter (function (IField_Field (f, lo, wd)) ->
-            Env.addLocalVar loc env f (extract_bits' loc op lo wd)
+            let v = extract_bits' loc op lo wd in
+            if !trace_instruction then Printf.printf "      %s = %s\n" (pprint_ident f) (pp_value v);
+            Env.addLocalVar loc env f v
         ) fields;
         if to_bool loc (eval_expr loc env guard) then begin
             List.iter (fun (i, b) ->
                 if eval_eq loc (extract_bits' loc op i 1) (from_bitsLit b) then
                     raise (Throw (loc, Exc_Unpredictable))
             ) unpreds;
-            eval_stmts env b;
+            List.iter (eval_stmt env) b;
             true
         end else begin
             false
@@ -830,7 +846,7 @@ let rec eval_decode_pattern (loc: AST.l) (x: decode_pattern) (op: value): bool =
     | DecoderPattern_Bits     b -> eval_eq     loc op (from_bitsLit b)
     | DecoderPattern_Mask     m -> eval_inmask loc op (from_maskLit m)
     | DecoderPattern_Wildcard _ -> true
-    | DecoderPattern_Not      p -> not (eval_decode_pattern loc x op)
+    | DecoderPattern_Not      p -> not (eval_decode_pattern loc p op)
     )
 
 (** Evaluate instruction decode case alternative *)
@@ -841,8 +857,18 @@ let rec eval_decode_alt (loc: AST.l) (env: Env.t) (DecoderAlt_Alt (ps, b)) (vs: 
         | DecoderBody_UNALLOC loc -> raise (Throw (loc, Exc_Undefined))
         | DecoderBody_NOP loc -> true
         | DecoderBody_Encoding (enc, l) ->
-                let enc' = Env.getEncoding env enc in
-                eval_encoding env enc' op
+                let (enc, opost, cond, exec) = Env.getInstruction loc env enc in
+                if eval_encoding env enc op then begin
+                    (match opost with
+                    | Some post -> eval_stmts env post
+                    | None -> ()
+                    );
+                    (* todo: should evaluate ConditionHolds to decide whether to execute body *)
+                    List.iter (eval_stmt env) exec;
+                    true
+                end else begin
+                    false
+                end
         | DecoderBody_Decoder (fs, c, loc) ->
                 let env = Env.empty in (* todo: this seems to share a single mutable object far too widely *)
                 List.iter (function (IField_Field (f, lo, wd)) ->
@@ -942,12 +968,14 @@ let build_evaluation_environment (ds: AST.declaration list): Env.t = begin
                 in
                 let args = List.map name_of atys in
                 Env.addFun loc env f (tvs, List.append args [v], loc, body)
-        (*
-        | Decl_InstructionDefn of ident * (encoding) list * (stmt list) option * bool * stmt list * l
         | Decl_InstructionDefn(nm, encs, opost, conditional, exec, loc) ->
-        | Decl_DecoderDefn of ident * decode_case * l
+                (* Instructions are looked up by their encoding name *)
+                List.iter (fun enc ->
+                    let Encoding_Block (nm, _, _, _, _, _, _, _) = enc in
+                    Env.addInstruction loc env nm (enc, opost, conditional, exec)
+                ) encs
         | Decl_DecoderDefn(nm, case, loc) ->
-        *)
+                Env.addDecoder env nm case
         | Decl_NewMapDefn(rty, f, atys, body, loc) ->
                 let tvs  = Asl_utils.to_sorted_list (TC.fv_funtype (f, false, [], [], atys, rty)) in
                 let args = List.map snd atys in
@@ -983,8 +1011,6 @@ let build_evaluation_environment (ds: AST.declaration list): Env.t = begin
         | Decl_VarSetterType (_, _, _, _)   | Decl_ArraySetterType (_, _, _, _, _)
         | Decl_Operator1 (_, _, _)
         | Decl_Operator2 (_, _, _)
-        | Decl_InstructionDefn (_, _, _, _, _, _)
-        | Decl_DecoderDefn (_, _, _)
         | Decl_MapClause (_, _, _, _, _)
         -> ()
         )

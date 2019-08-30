@@ -577,8 +577,7 @@ end = struct
         let r = k child in
         parent.modified <- IdentSet.union parent.modified child.modified;
         let locals    = Bindings.bindings (List.hd child.locals) in
-        let implicits = Bindings.bindings !(child.implicits) in
-        (r, List.append implicits locals)
+        (r, locals)
 
     let addLocalVar (env: t) (loc: AST.l) (v: AST.ident) (ty: AST.ty): unit =
         (* Printf.printf "New local var %s : %s at %s\n" (pprint_ident v) (ppp_type ty) (pp_loc loc); *)
@@ -2071,7 +2070,14 @@ let tc_encoding (env: Env.t) (x: encoding): (encoding * ((AST.ident * AST.ty) li
             Env.addLocalVar env loc fnm (type_bits (Expr_LitInt (string_of_int wd)))
         ) fields;
         let guard' = check_expr env loc type_bool guard in
-        let (b', bs) = Env.nest_with_bindings (fun env' -> List.map (tc_stmt env') b) env in
+        let (b', bs) = Env.nest_with_bindings (fun env' ->
+            let b' = tc_stmts env' loc b in
+            let imps = Env.getAllImplicits env in
+            List.iter (fun (v, ty) -> Env.addLocalVar env' loc v ty) imps;
+            let decls = declare_implicits loc imps in
+            if verbose && decls <> [] then Printf.printf "Implicit decls: %s %s" (pp_loc loc) (Utils.to_string (PP.pp_indented_block decls));
+            List.append decls b'
+        ) env in
         (Encoding_Block (nm, iset, fields, opcode, guard', unpreds, b', loc), bs)
     )
 
@@ -2320,16 +2326,8 @@ let tc_declaration (env: GlobalEnv.t) (d: AST.declaration): AST.declaration list
             (* todo: ponder what to do when encodings don't all define the same variables *)
             List.iter (fun vs -> List.iter (fun (v, ty) -> Env.addLocalVar locals loc v ty) vs) vss;
 
-            let (opost', pvs) = (match opost with
-                | Some b ->
-                    let (b', vs) = Env.nest_with_bindings (fun env' -> List.map (tc_stmt env') b) locals in
-                    (Some b', vs)
-                | None ->
-                    (None, [])
-            ) in
-            List.iter (fun (v, ty) -> Env.addLocalVar locals loc v ty) pvs;
-
-            let exec' = tc_body locals loc exec in
+            let opost' = map_option (tc_stmts locals loc) opost in
+            let exec' = tc_stmts locals loc exec in
             [Decl_InstructionDefn(nm, encs', opost', conditional, exec', loc)]
     | Decl_DecoderDefn(nm, case, loc) ->
             let case' = tc_decode_case env loc [] case in

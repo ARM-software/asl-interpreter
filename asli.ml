@@ -105,12 +105,13 @@ let read_spec (filename : string): AST.declaration list =
     List.concat (List.rev !r)
 
 let help_msg = [
+    {|:? :help                       Show this help message|};
+    {|:opcode <instr-set> <int>      Decode and execute opcode|};
     {|:project <file>                Execute ASLi commands in <file>|};
     {|:q :quit                       Exit the interpreter|};
     {|:set impdef <string> = <expr>  Define implementation defined behavior|};
     {|:set +<flag>                   Set flag|};
     {|:set -<flag>                   Clear flag|};
-    {|:? :help                       Show this help message|};
     {|<expr>                         Execute ASL expression|};
     {|<stmt> ;                       Execute ASL statement|}
 ]
@@ -137,39 +138,25 @@ let rec process_command (tcenv: TC.Env.t) (env: Eval.Env.t) (fname: string) (inp
         List.iter print_endline help_msg;
         print_endline "\nFlags:";
         List.iter (fun (nm, v) -> Printf.printf "  %s%s\n" (if !v then "+" else "-") nm) flags
+    | [":opcode"; iset; opcode] ->
+        (* todo: make this code more robust *)
+        let op = Value.VBits (Primops.prim_cvt_int_bits (Z.of_int 32) (Z.of_int (int_of_string opcode))) in
+        Printf.printf "Decoding and executing instruction %s %s\n" iset (Value.pp_value op);
+        let decoder = Eval.Env.getDecoder env (Ident iset) in
+        Eval.eval_decode_case AST.Unknown env decoder op
     | (":set" :: "impdef" :: rest) ->
         let cmd    = String.concat " " rest in
         let loc    = mkLoc fname cmd in
         let lexbuf = Lexing.from_string cmd in
         let lexer  = offside_token Lexer.token in
-        (try
-            let CLI_Impdef (x, e) = Parser.impdef_command_start lexer lexbuf in
-            let (s, e') = TC.with_unify tcenv loc (fun u ->
-                let (e', _) = TC.tc_expr tcenv u loc e in
-                e'
-            ) in
-            let e'' = TC.unify_subst_e s e' in
-            let v = Eval.eval_expr loc env e'' in
-            Eval.Env.setImpdef env x v
-        with
-        | Parse_error_locn(l, s) -> begin
-            Printf.printf "  Syntax error %s at %s\n" s (pp_loc l)
-        end
-        | PrecedenceError(loc, op1, op2) -> begin
-            Printf.printf "  Syntax error: operators %s and %s require parentheses to disambiguate expression at location %s\n"
-                (Utils.to_string (Asl_parser_pp.pp_binop op1))
-                (Utils.to_string (Asl_parser_pp.pp_binop op2))
-                (pp_loc loc)
-        end
-        | Parser.Error -> begin
-            let curr = lexbuf.Lexing.lex_curr_p in
-            let tok = Lexing.lexeme lexbuf in
-            Printf.printf "  Parser error at %s '%s'\n" (AST.pp_lexing_position curr) tok
-        end
-        | exc ->
-            Printf.printf "  Error %s\n" (Printexc.to_string exc);
-            Printexc.print_backtrace stdout
-        )
+        let CLI_Impdef (x, e) = Parser.impdef_command_start lexer lexbuf in
+        let (s, e') = TC.with_unify tcenv loc (fun u ->
+            let (e', _) = TC.tc_expr tcenv u loc e in
+            e'
+        ) in
+        let e'' = TC.unify_subst_e s e' in
+        let v = Eval.eval_expr loc env e'' in
+        Eval.Env.setImpdef env x v
     | [":set"; flag] when Utils.startswith flag "+" ->
         (match List.assoc_opt (Utils.stringDrop 1 flag) flags with
         | None -> Printf.printf "Unknown flag %s\n" flag;
@@ -196,52 +183,52 @@ let rec process_command (tcenv: TC.Env.t) (env: Eval.Env.t) (fname: string) (inp
         let loc    = mkLoc fname input in
         let lexbuf = Lexing.from_string input in
         let lexer  = offside_token Lexer.token in
-        (try
-            if ';' = String.get input (String.length input - 1) then begin
-                let s = Parser.stmt_command_start lexer lexbuf in
-                let s' = TC.tc_stmt tcenv s in
-                Eval.eval_stmt env s'
-            end else begin
-                let e = Parser.expr_command_start lexer lexbuf in
-                let (s, e') = TC.with_unify tcenv loc (fun u ->
-                    let (e', _) = TC.tc_expr tcenv u loc e in
-                    e'
-                ) in
-                let e'' = TC.unify_subst_e s e' in
-                let v = Eval.eval_expr loc env e'' in
-                print_endline (Value.pp_value v)
-            end
-        with
-        | Parse_error_locn(l, s) -> begin
-            Printf.printf "  Syntax error %s at %s\n" s (pp_loc l)
+        if ';' = String.get input (String.length input - 1) then begin
+            let s = Parser.stmt_command_start lexer lexbuf in
+            let s' = TC.tc_stmt tcenv s in
+            Eval.eval_stmt env s'
+        end else begin
+            let e = Parser.expr_command_start lexer lexbuf in
+            let (s, e') = TC.with_unify tcenv loc (fun u ->
+                let (e', _) = TC.tc_expr tcenv u loc e in
+                e'
+            ) in
+            let e'' = TC.unify_subst_e s e' in
+            let v = Eval.eval_expr loc env e'' in
+            print_endline (Value.pp_value v)
         end
-        | PrecedenceError(loc, op1, op2) -> begin
-            Printf.printf "  Syntax error: operators %s and %s require parentheses to disambiguate expression at location %s\n"
-                (Utils.to_string (Asl_parser_pp.pp_binop op1))
-                (Utils.to_string (Asl_parser_pp.pp_binop op2))
-                (pp_loc loc)
-        end
-        | Parser.Error -> begin
-            let curr = lexbuf.Lexing.lex_curr_p in
-            let tok = Lexing.lexeme lexbuf in
-            Printf.printf "  Parser error at %s '%s'\n" (AST.pp_lexing_position curr) tok
-        end
-        | TC.UnknownObject (loc, what, x) ->
-            Printf.printf "  %s: Type error: Unknown %s %s\n" (pp_loc loc) what x
-        | TC.DoesNotMatch (loc, what, x, y) ->
-            Printf.printf "  %s: Type error: %s %s does not match %s\n" (pp_loc loc) what x y
-        | TC.IsNotA (loc, what, x) ->
-            Printf.printf "  %s: Type error: %s is not a %s\n" (pp_loc loc) x what
-        | TC.Ambiguous (loc, what, x) ->
-            Printf.printf "  %s: Type error: %s %s is ambiguous\n" (pp_loc loc) what x
-        | TC.TypeError (loc, what) ->
-            Printf.printf "  %s: Type error: %s\n" (pp_loc loc) what
-        | Value.EvalError (loc, msg) ->
-            Printf.printf "  %s: Evaluation error: %s\n" (pp_loc loc) msg
-        | exc ->
-            Printf.printf "  Error %s\n" (Printexc.to_string exc);
-            Printexc.print_backtrace stdout
-        )
+    )
+
+let try_process_command (tcenv: TC.Env.t) (env: Eval.Env.t) (fname: string) (input: string): unit =
+    (try
+        process_command tcenv env fname input
+    with
+    | Parse_error_locn(l, s) -> begin
+        Printf.printf "  Syntax error %s at %s\n" s (pp_loc l)
+    end
+    | PrecedenceError(loc, op1, op2) -> begin
+        Printf.printf "  Syntax error: operators %s and %s require parentheses to disambiguate expression at location %s\n"
+            (Utils.to_string (Asl_parser_pp.pp_binop op1))
+            (Utils.to_string (Asl_parser_pp.pp_binop op2))
+            (pp_loc loc)
+    end
+    | Parser.Error ->
+        Printf.printf "  Parser error\n";
+    | TC.UnknownObject (loc, what, x) ->
+        Printf.printf "  %s: Type error: Unknown %s %s\n" (pp_loc loc) what x
+    | TC.DoesNotMatch (loc, what, x, y) ->
+        Printf.printf "  %s: Type error: %s %s does not match %s\n" (pp_loc loc) what x y
+    | TC.IsNotA (loc, what, x) ->
+        Printf.printf "  %s: Type error: %s is not a %s\n" (pp_loc loc) x what
+    | TC.Ambiguous (loc, what, x) ->
+        Printf.printf "  %s: Type error: %s %s is ambiguous\n" (pp_loc loc) what x
+    | TC.TypeError (loc, what) ->
+        Printf.printf "  %s: Type error: %s\n" (pp_loc loc) what
+    | Value.EvalError (loc, msg) ->
+        Printf.printf "  %s: Evaluation error: %s\n" (pp_loc loc) msg
+    | exc ->
+        Printf.printf "  Error %s\n" (Printexc.to_string exc);
+        Printexc.print_backtrace stdout
     )
 
 let rec repl (tcenv: TC.Env.t) (env: Eval.Env.t): unit =
@@ -250,7 +237,7 @@ let rec repl (tcenv: TC.Env.t) (env: Eval.Env.t): unit =
     | None -> ()
     | Some input ->
         LNoise.history_add input |> ignore;
-        process_command tcenv env "<stdin>" input;
+        try_process_command tcenv env "<stdin>" input;
         repl tcenv env
     )
 
