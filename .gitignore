@@ -1,5 +1,4 @@
 asli
-asli.docdir
 *.byte
 *.native
 .*.swp
@@ -13,6 +12,7 @@ asl_parser_pp.ml
 _build
 asl_unquotiented.*
 asl_quotiented.*
+test.native
 *.aux
 *.dvi
 *.log

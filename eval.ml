@@ -21,8 +21,17 @@ open Value
  * Flags to control behaviour (mostly for debugging)
  ****************************************************************)
 
+(** Debugging output on every variable write *)
+let trace_write = ref false
+
 (** Debugging output on every function call *)
-let trace_funcall = false
+let trace_funcall = ref false
+
+(** Debugging output on every primitive function or function call *)
+let trace_primop = ref false
+
+(** Debugging output on every instruction execution *)
+let trace_instruction = ref false
 
 
 (** It is an error to have multiple function definitions with conflicting types.
@@ -174,6 +183,7 @@ end = struct
         k child
 
     let addLocalVar (loc: l) (env: t) (x: ident) (v: value): unit =
+        if !trace_write then Printf.printf "TRACE: fresh %s = %s\n" (pprint_ident x) (pp_value v);
         (match env.locals with
         | (bs :: _) -> set_scope x v bs
         | []        -> raise (EvalError (loc, "addLocalVar"))
@@ -236,6 +246,7 @@ end = struct
         )
 
     let setVar (loc: l) (env: t) (x: ident) (v: value): unit =
+        if !trace_write then Printf.printf "TRACE: write %s = %s\n" (pprint_ident x) (pp_value v);
         (match findScope env x with
         | Some bs -> set_scope x v bs
         | None    -> raise (EvalError (loc, "setVar " ^ pprint_ident x))
@@ -730,17 +741,23 @@ and eval_stmt (env: Env.t) (x: AST.stmt): unit =
 
 (** Evaluate call to function or procedure *)
 and eval_call (loc: l) (env: Env.t) (f: ident) (tvs: value list) (vs: value list): unit =
-    if trace_funcall then begin
-        Printf.printf "eval_call: %s " (pprint_ident f);
-        List.iter (fun v -> Printf.printf " [%s]" (pp_value v)) tvs;
-        List.iter (fun v -> Printf.printf " %s" (pp_value v)) vs;
-        Printf.printf "\n"
-    end;
     (match eval_prim (name_of_FIdent f) tvs vs with
     | Some r ->
+        if !trace_primop then begin
+            Printf.printf "TRACE primop: %s " (pprint_ident f);
+            List.iter (fun v -> Printf.printf " [%s]" (pp_value v)) tvs;
+            List.iter (fun v -> Printf.printf " %s" (pp_value v)) vs;
+            Printf.printf " --> %s\n" (pp_value r);
+        end;
         raise (Return (Some r))
     | None ->
         begin
+            if !trace_funcall then begin
+                Printf.printf "TRACE funcall: %s " (pprint_ident f);
+                List.iter (fun v -> Printf.printf " [%s]" (pp_value v)) tvs;
+                List.iter (fun v -> Printf.printf " %s" (pp_value v)) vs;
+                Printf.printf "\n"
+            end;
             let (targs, args, loc, b) = Env.getFun loc env f in
             assert (List.length targs = List.length tvs);
             assert (List.length args  = List.length vs);
@@ -781,6 +798,7 @@ let eval_encoding (env: Env.t) (x: encoding) (op: value): bool =
     | Opcode_Mask m -> eval_inmask loc op (from_maskLit m)
     ) in
     if ok then begin
+        if !trace_instruction then Printf.printf "TRACE: instruction %s\n" (pprint_ident nm);
         List.iter (function (IField_Field (f, lo, wd)) ->
             Env.addLocalVar loc env f (extract_bits' loc op lo wd)
         ) fields;

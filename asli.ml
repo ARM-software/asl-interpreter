@@ -108,9 +108,18 @@ let help_msg = [
     {|:project <file>                Execute ASLi commands in <file>|};
     {|:q :quit                       Exit the interpreter|};
     {|:set impdef <string> = <expr>  Define implementation defined behavior|};
+    {|:set +<flag>                   Set flag|};
+    {|:set -<flag>                   Clear flag|};
     {|:? :help                       Show this help message|};
     {|<expr>                         Execute ASL expression|};
     {|<stmt> ;                       Execute ASL statement|}
+]
+
+let flags = [
+    ("trace:write", Eval.trace_write);
+    ("trace:fun",   Eval.trace_funcall);
+    ("trace:prim",  Eval.trace_primop);
+    ("trace:instr", Eval.trace_instruction)
 ]
 
 let mkLoc (fname: string) (input: string): AST.l =
@@ -125,7 +134,9 @@ let rec process_command (tcenv: TC.Env.t) (env: Eval.Env.t) (fname: string) (inp
     | [""] ->
         ()
     | [":help"] | [":?"] ->
-        List.iter print_endline help_msg
+        List.iter print_endline help_msg;
+        print_endline "\nFlags:";
+        List.iter (fun (nm, v) -> Printf.printf "  %s%s\n" (if !v then "+" else "-") nm) flags
     | (":set" :: "impdef" :: rest) ->
         let cmd    = String.concat " " rest in
         let loc    = mkLoc fname cmd in
@@ -158,6 +169,16 @@ let rec process_command (tcenv: TC.Env.t) (env: Eval.Env.t) (fname: string) (inp
         | exc ->
             Printf.printf "  Error %s\n" (Printexc.to_string exc);
             Printexc.print_backtrace stdout
+        )
+    | [":set"; flag] when Utils.startswith flag "+" ->
+        (match List.assoc_opt (Utils.stringDrop 1 flag) flags with
+        | None -> Printf.printf "Unknown flag %s\n" flag;
+        | Some f -> f := true
+        )
+    | [":set"; flag] when Utils.startswith flag "-" ->
+        (match List.assoc_opt (Utils.stringDrop 1 flag) flags with
+        | None -> Printf.printf "Unknown flag %s\n" flag;
+        | Some f -> f := false
         )
     | [":project"; prj] ->
         let inchan = open_in prj in
